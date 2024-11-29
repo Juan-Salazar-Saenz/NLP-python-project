@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resultados de búsqueda</title>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <h1 class="mt-5">Resultados de búsqueda</h1>
+        <div class="row">
+            {% for product in products %}
+                <div class="col-md-4">
+                    <div class="card">
+                        <img src="{{ product['image link'] }}" class="card-img-top" alt="{{ product['title'] }}">
+                        <div class="card-body">
+                            <h5 class="card-title">{{ product['title'] }}</h5>
+                            <p class="card-text">Precio: ${{ product['price'] }}</p>
+                            <a href="{{ product['post link'] }}" class="btn btn-primary" target="_blank">Ver producto</a>
+                        </div>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>
