@@ -11,9 +11,45 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
+from textblob import TextBlob
+import google.generativeai as genai
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # Necesario para usar sesiones
+
+def get_ratings_from_gemini(df, api_key, product_title):
+    """
+    Esta función utiliza Gemini para analizar comentarios y generar calificaciones basadas en IA.
+    """
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-pro")
+    generated_ratings = []
+
+    for _, row in df.iterrows():
+        comment = row['Comentario']
+        if comment == "Comentario no disponible":
+            generated_ratings.append(None)
+            continue
+        
+        prompt = f"""
+        Analiza este comentario para el producto : "{product_title}":
+        Opinión del usuario : "{comment}"
+
+        Instrucciones:
+        - Evalúa esta opinión y asigna una calificación en una escala de 0.0 a 5.0, donde 0.0 es muy negativo y 5.0 es muy positivo.
+        - Solo responde con la calificación numérica, sin explicaciones adicionales.
+        """
+        try:
+            # response = genai.generate_text(model="gemini-pro", prompt=prompt)
+            response = model.generate_content(prompt)
+            rating = float(response.text.strip())
+            generated_ratings.append(rating)
+        except Exception as e:
+            print(f"Error procesando comentario con Gemini: {e}")
+            generated_ratings.append(None)
+
+    df['Calificación Gemini'] = generated_ratings
+    return df
 
 @app.route('/', methods=['GET', 'POST'])
 def home():
@@ -71,11 +107,7 @@ def nlp_analysis(product_id):
         # Espera explícita para asegurarse de que el botón "Mostrar todas las opiniones" esté clickeable
         try:
             see_more_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.CLASS_NAME, 'show-more-click')))
-            
-            # Desplazar hacia el botón para asegurarse de que esté en la vista
             driver.execute_script("arguments[0].scrollIntoView(true);", see_more_button)
-
-            # Hacer clic en el botón
             see_more_button.click()
         except Exception as e:
             print("No se encontró el botón de 'Mostrar todas las opiniones', extraeremos los comentarios visibles directamente.")
@@ -91,37 +123,30 @@ def nlp_analysis(product_id):
         # Buscar los comentarios visibles directamente en la página
         reviews = soup.find_all('article', class_='ui-review-capability-comments__comment')
 
-        # Si no se encuentran comentarios, crear un DataFrame vacío
         if not reviews:
             print("No se encontraron comentarios en la página.")
             df = pd.DataFrame(columns=['Fecha', 'Calificación', 'Comentario'])
         else:
-            # Si hay comentarios, extraerlos
             for review in reviews:
-                # Extraer la fecha
                 try:
                     date = review.find('span', class_='ui-review-capability-comments__comment__date').text.strip()
                     dates.append(date)
                 except AttributeError:
                     dates.append('Fecha no disponible')
                 
-                # Extraer la calificación (contando las estrellas)
                 try:
-                    rating_text = review.find('p', class_='andes-visually-hidden').text.strip()  # Obtener el texto que contiene la calificación
-                    # Extraer el número de calificación del texto (por ejemplo, 'Calificación 1 de 5')
-                    rating = rating_text.split(' ')[1]  # Tomamos el número después de "Calificación"
+                    rating_text = review.find('p', class_='andes-visually-hidden').text.strip()
+                    rating = rating_text.split(' ')[1]
                     ratings.append(rating)
                 except AttributeError:
                     ratings.append('Calificación no disponible')
                 
-                # Extraer el comentario
                 try:
                     comment = review.find('p', class_='ui-review-capability-comments__comment__content').text.strip()
                     comments.append(comment)
                 except AttributeError:
                     comments.append('Comentario no disponible')
 
-            # Crear el DataFrame con los datos extraídos
             df = pd.DataFrame({
                 'Fecha': dates,
                 'Calificación': ratings,
@@ -130,17 +155,38 @@ def nlp_analysis(product_id):
 
         driver.quit()  # Cerrar el navegador cuando ya termine
 
-        return render_template('nlp_analysis.html', product=product, reviews=df.to_html(classes='table table-bordered'))
+        # Añade análisis de sentimientos con TextBlob
+        df_copy = df.copy()
+
+        def calculate_sentiment_score(comment):
+            blob = TextBlob(comment)
+            polarity = blob.sentiment.polarity
+            return round((polarity + 1) * 2.5, 1)
+
+        df_copy['Calificación TextBlob'] = df_copy['Comentario'].apply(calculate_sentiment_score)
+
+        # Usa Gemini para análisis adicional
+        api_key = "AIzaSyBeNAcVnDURa9vDmRSNeWE70IX7H0OeMqs"
+        df_copy = get_ratings_from_gemini(df_copy, api_key, product['title'])
+
+        reviews_table = df.to_html(classes='table table-bordered')
+        sentiment_table = df_copy[['Comentario', 'Calificación TextBlob', 'Calificación Gemini']].to_html(classes='table table-striped')
+
+        return render_template(
+            'nlp_analysis.html',
+            product=product,
+            reviews=reviews_table,
+            sentiment_table=sentiment_table
+        )
 
     except IndexError:
         return "Producto no encontrado.", 404
     
 @app.route('/results', methods=['GET', 'POST'])
 def results():
-    # Verificar si los productos están en la sesión
     products = session.get('products')
     if not products:
-        return "No se encontraron productos.", 404  # Si no hay productos guardados
+        return "No se encontraron productos.", 404
 
     return render_template('results.html', products=products)
 
